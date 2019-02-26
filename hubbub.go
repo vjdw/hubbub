@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"log"
 	"net"
+	"os"
+	"time"
 
 	"github.com/mesilliac/pulse-simple"
 )
@@ -23,7 +27,7 @@ func main() {
 
 func runClient(server string) {
 	// Connect to pulseaudio.
-	ss := pulse.SampleSpec{pulse.SAMPLE_S16LE, 44100, 1}
+	ss := pulse.SampleSpec{Format: pulse.SAMPLE_S16LE, Rate: 48000, Channels: 2}
 	pb, err := pulse.Playback("Hubbub Client", "Hubbub Client", &ss)
 	defer pb.Free()
 	defer pb.Drain()
@@ -45,45 +49,67 @@ func runClient(server string) {
 	}
 	send(server, 1235, []byte("register"))
 
-	fmt.Printf("Started listening...")
-	p := make([]byte, 1*ss.Rate)
-	for {
-		_, remoteaddr, err := ser.ReadFromUDP(p)
+	pulseChunk := make([]byte, 800000)
+
+	fmt.Printf("Buffering...")
+	for i := 0; i < 800; i++ {
+		p := make([]byte, 1000)
+		_, _, err := ser.ReadFromUDP(p)
 		if err != nil {
 			fmt.Printf("Some error  %v", err)
 			continue
 		}
-		fmt.Printf("Read a message from %v\n", remoteaddr)
-
-		pCopy := make([]byte, 1*ss.Rate)
+		pCopy := make([]byte, 1000)
 		copy(pCopy, p)
-		go func() {
-			pb.Write(pCopy)
-			return
-		}()
+		pulseChunk = append(pulseChunk, pCopy...)
+	}
+
+	fmt.Printf("Play chunk\n")
+	toPlay := pulseChunk[:400000]
+	pulseChunk = pulseChunk[400000:]
+	go pb.Write(toPlay)
+
+	for {
+		fmt.Printf("Play chunk\n")
+		toPlay := pulseChunk[:200000]
+		pulseChunk = pulseChunk[200000:]
+		go pb.Write(toPlay)
+
+		for i := 0; i < 200; i++ {
+			p := make([]byte, 1000)
+			_, _, err := ser.ReadFromUDP(p)
+			if err != nil {
+				fmt.Printf("Some error  %v", err)
+				continue
+			}
+			pCopy := make([]byte, 1000)
+			copy(pCopy, p)
+			pulseChunk = append(pulseChunk, pCopy...)
+		}
 	}
 }
 
 func runServer() {
 	client := waitForClient()
 
-	// Connect to pulseaudio.
-	recss := pulse.SampleSpec{pulse.SAMPLE_S16LE, 44100, 1}
-	rec, err := pulse.Capture2("Hubbub Server", "Hubbub Server", &recss, "alsa_output.pci-0000_00_07.0.analog-stereo.monitor")
-	defer rec.Free()
-	defer rec.Drain()
+	var pipeFile = "/tmp/pulsefifo"
+	fmt.Println("open a named pipe file for read.")
+	file, err := os.OpenFile(pipeFile, os.O_CREATE, os.ModeNamedPipe)
 	if err != nil {
-		fmt.Printf("Could not create record stream: %s\n", err)
-		return
+		log.Fatal("Open named pipe file error:", err)
 	}
 
+	reader := bufio.NewReader(file)
 	for {
-		data := make([]byte, 1*recss.Rate)
-		rec.Read(data)
-
-		dataCopy := make([]byte, 1*recss.Rate)
+		data := make([]byte, 1000)
+		for i := range data {
+			b, _ := reader.ReadByte()
+			data[i] = b
+		}
+		dataCopy := make([]byte, 1000)
 		copy(dataCopy, data)
 		go send(client, 1234, dataCopy)
+		time.Sleep((1000000 / 192) * time.Microsecond)
 	}
 }
 
