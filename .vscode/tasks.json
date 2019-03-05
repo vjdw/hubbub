@@ -4,9 +4,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build",
+            "label": "build",
             "type": "shell",
-            "command": "go build",
+            "command": "go build ./cmd/hubbub",
             "group": {
                 "kind": "build",
                 "isDefault": true
