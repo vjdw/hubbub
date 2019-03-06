@@ -38,63 +38,69 @@ func Run(server string) (err error) {
 	}
 	network.Send(server, 1235, []byte("register"))
 
-	pulseChunk := make([]byte, 0)
+	audioBuf := make([]byte, 0)
+	var packetSize = 32768
+	var targetBufSize = 900000
+	targetBufSize = targetBufSize - (targetBufSize % packetSize)
+	fmt.Println("targetBufSize ", targetBufSize)
 
+	audioBuf = fillBuffer(audioBuf, targetBufSize, packetSize, ser)
+	var audioBufRemaining = targetBufSize
+
+	var bytesPerSample = 2 // int16
+
+	var first = true
+	toPlaySize := targetBufSize / 2
+	toPlaySize = toPlaySize - (toPlaySize % packetSize)
+
+	for {
+		fmt.Printf("Play chunk\n")
+
+		toPlay := audioBuf[:toPlaySize]
+		audioBuf = audioBuf[toPlaySize:]
+		audioBufRemaining -= toPlaySize
+
+		toPlayReader := bytes.NewReader(toPlay)
+		toPlayVals := make([]int16, toPlaySize/bytesPerSample)
+		for i := range toPlayVals {
+			var val int16
+			binary.Read(toPlayReader, binary.LittleEndian, &val)
+			toPlayVals[i] = val
+			fmt.Println("sample val: ", val)
+		}
+
+		_, err = device.Write(toPlayVals)
+		if err != nil {
+			return err
+		}
+
+		if first {
+			first = false
+			toPlaySize = targetBufSize/4 - (targetBufSize % packetSize)
+			targetBufSize = 3 * targetBufSize / 4
+			targetBufSize = targetBufSize - (targetBufSize % packetSize)
+		}
+
+		var toAdd = targetBufSize - audioBufRemaining
+		audioBuf = fillBuffer(audioBuf, toAdd, packetSize, ser)
+		audioBufRemaining += toAdd
+	}
+}
+
+func fillBuffer(buf []byte, toAdd int, packetSize int, ser *net.UDPConn) []byte {
 	fmt.Printf("Buffering...")
-	for i := 0; i < 800; i++ {
-		p := make([]byte, 1024)
+	var added = 0
+	for added <= toAdd {
+		p := make([]byte, packetSize)
 		_, _, err := ser.ReadFromUDP(p)
 		if err != nil {
 			fmt.Printf("Some error  %v", err)
 			continue
 		}
-		pCopy := make([]byte, 1024)
+		pCopy := make([]byte, packetSize)
 		copy(pCopy, p)
-		pulseChunk = append(pulseChunk, pCopy...)
+		buf = append(buf, pCopy...)
+		added += packetSize
 	}
-
-	toPlay := pulseChunk[:409600]
-	toPlayReader := bytes.NewReader(toPlay)
-	pulseChunk = pulseChunk[409600:]
-	toPlayInts := make([]int16, 204800)
-	for i := range toPlayInts {
-		var num int16
-		binary.Read(toPlayReader, binary.LittleEndian, &num)
-		toPlayInts[i] = num
-		fmt.Println("num: ", num)
-	}
-	_, err = device.Write(toPlayInts)
-	if err != nil {
-		return err
-	}
-
-	for {
-		fmt.Printf("Play chunk\n")
-		toPlay := pulseChunk[:102400]
-		toPlayReader := bytes.NewReader(toPlay)
-		pulseChunk = pulseChunk[102400:]
-		toPlayInts := make([]int16, 50120)
-		for i := range toPlayInts {
-			var num int16
-			binary.Read(toPlayReader, binary.LittleEndian, &num)
-			toPlayInts[i] = num
-			fmt.Println("num: ", num)
-		}
-		_, err := device.Write(toPlayInts)
-		if err != nil {
-			return err
-		}
-
-		for i := 0; i < 100; i++ {
-			p := make([]byte, 1024)
-			_, _, err := ser.ReadFromUDP(p)
-			if err != nil {
-				fmt.Printf("Some error  %v", err)
-				continue
-			}
-			pCopy := make([]byte, 1024)
-			copy(pCopy, p)
-			pulseChunk = append(pulseChunk, pCopy...)
-		}
-	}
+	return buf
 }
