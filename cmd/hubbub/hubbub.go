@@ -9,9 +9,9 @@ import (
 )
 
 func main() {
-
 	flagHostname := flag.String("h", "", "Hubbub server hostname")
 	flagServerMode := flag.Bool("s", false, "Server mode")
+
 	flag.Parse()
 
 	if *flagServerMode {

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"time"
 
 	alsa "github.com/cocoonlife/goalsa"
 
@@ -18,6 +19,10 @@ func getDevice() (b *alsa.PlaybackDevice, err error) {
 
 // Run a hubbub client
 func Run(server string) (err error) {
+	bytesPerSample := 2 // int16
+	channels := 2
+	rate := 48000
+
 	device, err := getDevice()
 	if err != nil {
 		fmt.Printf("Couldn't get audio device")
@@ -47,54 +52,64 @@ func Run(server string) (err error) {
 	audioBuf = fillBuffer(audioBuf, targetBufSize, packetSize, ser)
 	var audioBufRemaining = targetBufSize
 
-	var bytesPerSample = 2 // int16
-
 	var first = true
 	toPlaySize := targetBufSize / 2
 	toPlaySize = toPlaySize - (toPlaySize % packetSize)
 
+	//var packetSize = 32768
+	samplesPerPacket := float32(packetSize / (bytesPerSample * channels))
+	sampleDuration := 1.0 / float32(rate)
+	packetAudioDuration := time.Duration(int32(1000000.0*samplesPerPacket*sampleDuration)) * time.Microsecond
+	ticker := time.NewTicker(packetAudioDuration)
+	go func() {
+		for t := range ticker.C {
+			fmt.Println("Play chunk at", t)
+
+			toPlay := audioBuf[:toPlaySize]
+			audioBuf = audioBuf[toPlaySize:]
+			audioBufRemaining -= toPlaySize
+
+			toPlayReader := bytes.NewReader(toPlay)
+			toPlayVals := make([]int16, toPlaySize/bytesPerSample)
+			for i := range toPlayVals {
+				var val int16
+				binary.Read(toPlayReader, binary.LittleEndian, &val)
+				toPlayVals[i] = val
+				//fmt.Println("sample val: ", val)
+			}
+
+			_, err = device.Write(toPlayVals)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			if first {
+				first = false
+				toPlaySize = targetBufSize/4 - (targetBufSize % packetSize)
+				targetBufSize = 3 * targetBufSize / 4
+				targetBufSize = targetBufSize - (targetBufSize % packetSize)
+			}
+
+			// xyzzy need to make fillBuffer async from device.Write
+			var toAdd = targetBufSize - audioBufRemaining
+			audioBuf = fillBuffer(audioBuf, toAdd, packetSize, ser)
+			audioBufRemaining += toAdd
+		}
+	}()
+
 	for {
-		fmt.Printf("Play chunk\n")
-
-		toPlay := audioBuf[:toPlaySize]
-		audioBuf = audioBuf[toPlaySize:]
-		audioBufRemaining -= toPlaySize
-
-		toPlayReader := bytes.NewReader(toPlay)
-		toPlayVals := make([]int16, toPlaySize/bytesPerSample)
-		for i := range toPlayVals {
-			var val int16
-			binary.Read(toPlayReader, binary.LittleEndian, &val)
-			toPlayVals[i] = val
-			fmt.Println("sample val: ", val)
-		}
-
-		_, err = device.Write(toPlayVals)
-		if err != nil {
-			return err
-		}
-
-		if first {
-			first = false
-			toPlaySize = targetBufSize/4 - (targetBufSize % packetSize)
-			targetBufSize = 3 * targetBufSize / 4
-			targetBufSize = targetBufSize - (targetBufSize % packetSize)
-		}
-
-		var toAdd = targetBufSize - audioBufRemaining
-		audioBuf = fillBuffer(audioBuf, toAdd, packetSize, ser)
-		audioBufRemaining += toAdd
+		time.Sleep(1 * time.Second)
 	}
 }
 
 func fillBuffer(buf []byte, toAdd int, packetSize int, ser *net.UDPConn) []byte {
-	fmt.Printf("Buffering...")
+	fmt.Println("Buffering...")
 	var added = 0
 	for added <= toAdd {
 		p := make([]byte, packetSize)
 		_, _, err := ser.ReadFromUDP(p)
 		if err != nil {
-			fmt.Printf("Some error  %v", err)
+			fmt.Println("Some error  %v", err)
 			continue
 		}
 		pCopy := make([]byte, packetSize)

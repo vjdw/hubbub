@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"syscall"
 	"time"
 
 	"../network"
@@ -18,32 +19,41 @@ func Run() {
 	rate := 48000
 
 	clientHostname := waitForClient()
-	time.Sleep(5 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	pipeFile := "/tmp/pulsefifo"
 	fmt.Println("open a named pipe file for read.")
-	file, err := os.OpenFile(pipeFile, os.O_CREATE, os.ModeNamedPipe)
+	file, err := os.OpenFile(pipeFile, os.O_RDONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
 	if err != nil {
 		log.Fatal("Open named pipe file error:", err)
 	}
+	reader := bufio.NewReader(file)
 
 	var packetSize = 32768
-	reader := bufio.NewReader(file)
-	for {
-		data := make([]byte, packetSize)
-		for i := range data {
-			b, _ := reader.ReadByte()
-			data[i] = b
+	samplesPerPacket := float32(packetSize / (bytesPerSample * channels))
+	sampleDuration := 1.0 / float32(rate)
+	packetAudioDuration := time.Duration(int32(1000000.0*samplesPerPacket*sampleDuration)) * time.Microsecond
+	ticker := time.NewTicker(packetAudioDuration)
+	go func() {
+		for t := range ticker.C {
+			fmt.Println("Creating packet at", t)
+			data := make([]byte, packetSize)
+			for i := range data {
+				b, err := reader.ReadByte()
+				if err != nil {
+					fmt.Println("err getting byte")
+				}
+				data[i] = b
+			}
+			dataCopy := make([]byte, packetSize)
+			copy(dataCopy, data)
+			go network.Send(clientHostname, 1234, dataCopy)
+			fmt.Println("Sent packet at", t)
 		}
-		dataCopy := make([]byte, packetSize)
-		copy(dataCopy, data)
-		go network.Send(clientHostname, 1234, dataCopy)
+	}()
 
-		// Wouldn't need this if ReadByte would wait for a byte to be available
-		samplesPerPacket := float32(packetSize / (bytesPerSample * channels))
-		sampleDuration := 1.0 / float32(rate)
-		packetAudioDuration := time.Duration(int32(1000000.0*samplesPerPacket*sampleDuration)) * time.Microsecond
-		time.Sleep(packetAudioDuration)
+	for {
+		time.Sleep(1 * time.Second)
 	}
 }
 
