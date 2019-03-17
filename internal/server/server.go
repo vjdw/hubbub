@@ -36,7 +36,6 @@ func Run() {
 	ticker := time.NewTicker(packetAudioDuration)
 	go func() {
 		for t := range ticker.C {
-			fmt.Println("Creating packet at", t)
 			data := make([]byte, packetSize)
 			for i := range data {
 				b, err := reader.ReadByte()
@@ -48,7 +47,7 @@ func Run() {
 			dataCopy := make([]byte, packetSize)
 			copy(dataCopy, data)
 			go network.Send(clientHostname, 1234, dataCopy)
-			fmt.Println("Sent packet at", t)
+			fmt.Println("Sent", packetSize, "bytes at", t.Format(time.RFC3339))
 		}
 	}()
 

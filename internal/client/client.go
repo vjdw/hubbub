@@ -43,45 +43,40 @@ func Run(server string) (err error) {
 	}
 	network.Send(server, 1235, []byte("register"))
 
-	audioBuf := make([]byte, 0)
-	var packetSize = 32768
-	var targetBufSize = 900000
-	targetBufSize = targetBufSize - (targetBufSize % packetSize)
-	fmt.Println("targetBufSize ", targetBufSize)
+	var pcmStream = make(chan []byte, 512)
 
-	audioBuf = fillBuffer(audioBuf, targetBufSize, packetSize, ser)
-	var audioBufRemaining = targetBufSize
-
-	var first = true
-	toPlaySize := targetBufSize / 2
-	toPlaySize = toPlaySize - (toPlaySize % packetSize)
-
-	//var packetSize = 32768
-	samplesPerPacket := float32(packetSize / (bytesPerSample * channels))
-	sampleDuration := 1.0 / float32(rate)
-	packetAudioDuration := time.Duration(int32(1000000.0*samplesPerPacket*sampleDuration)) * time.Microsecond
-	ticker := time.NewTicker(packetAudioDuration)
+	// Receive audio from network and put on pcmStream channel
 	go func() {
-		for t := range ticker.C {
-			fmt.Println("Play chunk at", t)
+		audioBuf := make([]byte, 0)
+		var packetSize = 32768
+		var targetBufSize = 300000
+		targetBufSize = targetBufSize - (targetBufSize % packetSize)
+		fmt.Println("targetBufSize ", targetBufSize)
+
+		audioBufRemaining, audioBuf := fillBuffer(audioBuf, targetBufSize, packetSize, ser)
+		fmt.Println("Added", audioBufRemaining, "bytes to buffer")
+
+		var first = true
+		toPlaySize := targetBufSize / 2
+		toPlaySize = toPlaySize - (toPlaySize % packetSize)
+
+		samplesPerPacket := float32(packetSize / (bytesPerSample * channels))
+		sampleDuration := 1.0 / float32(rate)
+		packetAudioDuration := time.Duration(int32(1000000.0*samplesPerPacket*sampleDuration)) * time.Microsecond
+		ticker := time.NewTicker(packetAudioDuration)
+
+		for {
+			<-ticker.C
+			var toAdd = targetBufSize - audioBufRemaining
+			n := 0
+			n, audioBuf = fillBuffer(audioBuf, toAdd, packetSize, ser)
+			fmt.Println("Added", n, "bytes to buffer")
+			audioBufRemaining += n
 
 			toPlay := audioBuf[:toPlaySize]
 			audioBuf = audioBuf[toPlaySize:]
 			audioBufRemaining -= toPlaySize
-
-			toPlayReader := bytes.NewReader(toPlay)
-			toPlayVals := make([]int16, toPlaySize/bytesPerSample)
-			for i := range toPlayVals {
-				var val int16
-				binary.Read(toPlayReader, binary.LittleEndian, &val)
-				toPlayVals[i] = val
-				//fmt.Println("sample val: ", val)
-			}
-
-			_, err = device.Write(toPlayVals)
-			if err != nil {
-				fmt.Println(err)
-			}
+			pcmStream <- toPlay
 
 			if first {
 				first = false
@@ -89,11 +84,27 @@ func Run(server string) (err error) {
 				targetBufSize = 3 * targetBufSize / 4
 				targetBufSize = targetBufSize - (targetBufSize % packetSize)
 			}
+		}
+	}()
 
-			// xyzzy need to make fillBuffer async from device.Write
-			var toAdd = targetBufSize - audioBufRemaining
-			audioBuf = fillBuffer(audioBuf, toAdd, packetSize, ser)
-			audioBufRemaining += toAdd
+	// Receive audio from pcmStream channel and write to audio device
+	go func() {
+		for {
+			toPlay := <-pcmStream
+			toPlaySize := len(toPlay)
+			toPlayReader := bytes.NewReader(toPlay)
+			toPlayVals := make([]int16, toPlaySize/bytesPerSample)
+			for i := range toPlayVals {
+				var val int16
+				binary.Read(toPlayReader, binary.LittleEndian, &val)
+				toPlayVals[i] = val
+			}
+
+			_, err = device.Write(toPlayVals)
+			fmt.Println("Sent", toPlaySize, "bytes to device")
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 	}()
 
@@ -102,20 +113,21 @@ func Run(server string) (err error) {
 	}
 }
 
-func fillBuffer(buf []byte, toAdd int, packetSize int, ser *net.UDPConn) []byte {
-	fmt.Println("Buffering...")
+func fillBuffer(buf []byte, toAdd int, packetSize int, ser *net.UDPConn) (int, []byte) {
 	var added = 0
 	for added <= toAdd {
 		p := make([]byte, packetSize)
-		_, _, err := ser.ReadFromUDP(p)
+		n, _, err := ser.ReadFromUDP(p)
 		if err != nil {
-			fmt.Println("Some error  %v", err)
+			fmt.Println("Error reading from UDP %v", err)
 			continue
 		}
-		pCopy := make([]byte, packetSize)
+		pCopy := make([]byte, n)
 		copy(pCopy, p)
 		buf = append(buf, pCopy...)
-		added += packetSize
+		added += n
+		fmt.Printf("\r%d bytes added to buffer", added)
 	}
-	return buf
+	fmt.Printf("\n")
+	return added, buf
 }
