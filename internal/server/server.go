@@ -47,7 +47,7 @@ func Run() {
 			dataCopy := make([]byte, packetSize)
 			copy(dataCopy, data)
 			go network.Send(clientHostname, 1234, dataCopy)
-			fmt.Println("Sent", packetSize, "bytes at", t.Format(time.RFC3339))
+			fmt.Println("Sent", packetSize, "bytes to", clientHostname, ":1234 at", t.Format(time.RFC3339))
 		}
 	}()
 

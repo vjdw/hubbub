@@ -29,18 +29,18 @@ func Run(server string) (err error) {
 		return err
 	}
 
-	server = "localhost"
-	// Open connection to Hubbub server.
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", server, 1234))
+	laddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", "0.0.0.0", 1234))
 	if err != nil {
 		fmt.Printf("Some error %v\n", err)
 		return
 	}
-	ser, err := net.ListenUDP("udp", addr)
+
+	ser, err := net.ListenUDP("udp", laddr)
 	if err != nil {
 		fmt.Printf("Some error %v\n", err)
 		return
 	}
+
 	network.Send(server, 1235, []byte("register"))
 
 	var pcmStream = make(chan []byte, 512)
