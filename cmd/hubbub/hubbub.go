@@ -20,7 +20,14 @@ func main() {
 	}
 
 	fmt.Printf("Server hostname: %s\n", *flagHostname)
-	err := client.Run(*flagHostname)
+
+	device, err := client.GetDevice()
+	if err != nil {
+		fmt.Printf("Couldn't get audio device")
+		return
+	}
+
+	err = client.Run(*flagHostname, device)
 	if err != nil {
 		fmt.Println(err.Error())
 	}

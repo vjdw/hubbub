@@ -12,22 +12,21 @@ import (
 	"../network"
 )
 
-func getDevice() (b *alsa.PlaybackDevice, err error) {
+// GetDevice to do playback
+func GetDevice() (b *alsa.PlaybackDevice, err error) {
 	bp := alsa.BufferParams{BufferFrames: 0, PeriodFrames: 0, Periods: 0}
 	return alsa.NewPlaybackDevice("default", 2, alsa.FormatS16LE, 48000, bp)
 }
 
+type audiodevice interface {
+	Write(buf interface{}) (n int, err error)
+}
+
 // Run a hubbub client
-func Run(server string) (err error) {
+func Run(server string, device audiodevice) (err error) {
 	bytesPerSample := 2 // int16
 	channels := 2
 	rate := 48000
-
-	device, err := getDevice()
-	if err != nil {
-		fmt.Printf("Couldn't get audio device")
-		return err
-	}
 
 	laddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", "0.0.0.0", 1234))
 	if err != nil {
@@ -89,27 +88,33 @@ func Run(server string) (err error) {
 
 	// Receive audio from pcmStream channel and write to audio device
 	go func() {
-		for {
-			toPlay := <-pcmStream
-			toPlaySize := len(toPlay)
-			toPlayReader := bytes.NewReader(toPlay)
-			toPlayVals := make([]int16, toPlaySize/bytesPerSample)
-			for i := range toPlayVals {
-				var val int16
-				binary.Read(toPlayReader, binary.LittleEndian, &val)
-				toPlayVals[i] = val
-			}
-
-			_, err = device.Write(toPlayVals)
-			fmt.Println("Sent", toPlaySize, "bytes to device")
-			if err != nil {
-				fmt.Println(err)
-			}
-		}
+		playbackLoop(pcmStream, device)
 	}()
 
 	for {
 		time.Sleep(1 * time.Second)
+	}
+}
+
+func playbackLoop(input chan []byte, device audiodevice) {
+	bytesPerSample := 2 // int16
+
+	for {
+		toPlay := <-input
+		toPlaySize := len(toPlay)
+		toPlayReader := bytes.NewReader(toPlay)
+		toPlayVals := make([]int16, toPlaySize/bytesPerSample)
+		for i := range toPlayVals {
+			var val int16
+			binary.Read(toPlayReader, binary.LittleEndian, &val)
+			toPlayVals[i] = val
+		}
+
+		_, err := device.Write(toPlayVals)
+		fmt.Println("Sent", toPlaySize, "bytes to device")
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 }
 
@@ -119,7 +124,7 @@ func fillBuffer(buf []byte, toAdd int, packetSize int, ser *net.UDPConn) (int, [
 		p := make([]byte, packetSize)
 		n, _, err := ser.ReadFromUDP(p)
 		if err != nil {
-			fmt.Println("Error reading from UDP %v", err)
+			fmt.Println("Error reading from UDP", err)
 			continue
 		}
 		pCopy := make([]byte, n)
